@@ -860,6 +860,7 @@ impl State {
             under = PointContents::default();
         }
 
+        self.niri.sync_edge_window_hover(&under);
         self.niri.pointer_contents.clone_from(&under);
 
         let pointer = &self.niri.seat.get_pointer().unwrap();
@@ -1022,8 +1023,14 @@ impl State {
     pub fn refresh_pointer_contents(&mut self) {
         let _span = tracy_client::span!("Niri::refresh_pointer_contents");
 
-        let pointer = &self.niri.seat.get_pointer().unwrap();
+        let pointer = self.niri.seat.get_pointer().unwrap();
         let location = pointer.current_location();
+
+        let under = match self.niri.pointer_visibility {
+            PointerVisibility::Disabled => PointContents::default(),
+            _ => self.niri.contents_under(location),
+        };
+        self.niri.sync_edge_window_hover(&under);
 
         if !self.niri.exit_confirm_dialog.is_open()
             && !self.niri.is_locked()
@@ -1060,6 +1067,7 @@ impl State {
             PointerVisibility::Disabled => PointContents::default(),
             _ => self.niri.contents_under(location),
         };
+        self.niri.sync_edge_window_hover(&under);
 
         // We're not changing the global cursor location here, so if the contents did not change,
         // then nothing changed.
@@ -3457,6 +3465,65 @@ impl Niri {
         rv
     }
 
+    pub fn is_edge_window_target(&self, contents: &PointContents) -> bool {
+        if !self.pointer_visibility.is_visible()
+            || self.is_locked()
+            || self.screenshot_ui.is_open()
+            || self.window_mru_ui.is_open()
+        {
+            return false;
+        }
+
+        let pointer = self.seat.get_pointer().unwrap();
+        if pointer.is_grabbed() || self.has_active_pointer_constraint(contents) {
+            return false;
+        }
+
+        let Some(output) = &contents.output else {
+            return false;
+        };
+        let Some((window, hit)) = &contents.window else {
+            return false;
+        };
+        if matches!(
+            hit,
+            HitType::Activate {
+                is_tab_indicator: true
+            }
+        ) {
+            return false;
+        }
+
+        self.layout.edge_window_target(output, window).is_some()
+    }
+
+    pub fn sync_edge_window_hover(&mut self, contents: &PointContents) {
+        let target = self.is_edge_window_target(contents).then(|| {
+            let output = contents.output.as_ref().unwrap().clone();
+            let window = contents.window.as_ref().unwrap().0.clone();
+            (output, window)
+        });
+        self.layout
+            .set_edge_window_hover(target.as_ref().map(|(output, window)| (output, window)));
+    }
+
+    fn has_active_pointer_constraint(&self, contents: &PointContents) -> bool {
+        let pointer = self.seat.get_pointer().unwrap();
+        let focused_surface = pointer.current_focus();
+        let surface = focused_surface
+            .as_ref()
+            .or_else(|| contents.surface.as_ref().map(|(surface, _)| surface));
+        let Some(surface) = surface else {
+            return false;
+        };
+
+        let mut active = false;
+        with_pointer_constraint(surface, &pointer, |constraint| {
+            active = constraint.is_some_and(|constraint| constraint.is_active());
+        });
+        active
+    }
+
     pub fn output_under_cursor(&self) -> Option<Output> {
         let pos = self.seat.get_pointer().unwrap().current_location();
         self.global_space.output_under(pos).next().cloned()
@@ -3699,9 +3766,20 @@ impl Niri {
             .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
         let pointer_pos = pointer_pos - output_pos.to_f64();
 
-        // Get the render cursor to draw.
+        // Get the render cursor to draw. Edge-window navigation is a presentation-only
+        // override, so the client's cursor remains stored underneath it.
         let cursor_scale = output_scale.integer_scale();
-        let render_cursor = self.cursor_manager.get_render_cursor(cursor_scale);
+        let edge_window_target = self.tablet_cursor_location.is_none() && {
+            let location = self.seat.get_pointer().unwrap().current_location();
+            let contents = self.contents_under(location);
+            self.is_edge_window_target(&contents)
+        };
+        let render_cursor = if edge_window_target {
+            self.cursor_manager
+                .get_render_cursor_named(CursorIcon::Pointer, cursor_scale)
+        } else {
+            self.cursor_manager.get_render_cursor(cursor_scale)
+        };
 
         let output_scale = Scale::from(output.current_scale().fractional_scale());
 
@@ -6063,7 +6141,7 @@ impl Niri {
     /// Activates the pointer constraint if necessary according to the current pointer contents.
     ///
     /// Make sure the pointer location and contents are up to date before calling this.
-    pub fn maybe_activate_pointer_constraint(&self) {
+    pub fn maybe_activate_pointer_constraint(&mut self) {
         let Some((surface, surface_loc)) = &self.pointer_contents.surface else {
             return;
         };
@@ -6073,10 +6151,12 @@ impl Niri {
             return;
         }
 
+        let mut active = false;
         with_pointer_constraint(surface, &pointer, |constraint| {
             let Some(constraint) = constraint else { return };
 
             if constraint.is_active() {
+                active = true;
                 return;
             }
 
@@ -6090,7 +6170,12 @@ impl Niri {
             }
 
             constraint.activate();
+            active = true;
         });
+
+        if active {
+            self.layout.set_edge_window_hover(None);
+        }
     }
 
     pub fn focus_layer_surface_if_on_demand(&mut self, surface: Option<LayerSurface>) {
@@ -6183,6 +6268,11 @@ impl Niri {
         }
 
         if self.window_mru_ui.is_open() {
+            return;
+        }
+
+        // This feature is deliberately click-to-scroll, even with focus-follows-mouse enabled.
+        if self.is_edge_window_target(new_focus) {
             return;
         }
 

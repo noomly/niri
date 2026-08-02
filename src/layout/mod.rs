@@ -2332,6 +2332,44 @@ impl<W: LayoutElement> Layout<W> {
         mon.window_under(pos_within_output)
     }
 
+    pub fn edge_window_target(
+        &self,
+        output: &Output,
+        window: &W::Id,
+    ) -> Option<Rectangle<f64, Logical>> {
+        if self.overview_progress.is_some() || self.interactive_move.is_some() {
+            return None;
+        }
+
+        let mon = self.monitor_for_output(output)?;
+        if mon.workspace_switch.is_some() {
+            return None;
+        }
+
+        mon.active_workspace_ref().edge_window_target(window)
+    }
+
+    /// Updates the one edge-window hover target and clears stale targets on other workspaces.
+    pub fn set_edge_window_hover(&mut self, target: Option<(&Output, &W::Id)>) {
+        let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set else {
+            if let MonitorSet::NoOutputs { workspaces, .. } = &mut self.monitor_set {
+                for ws in workspaces {
+                    ws.set_edge_window_hover(None);
+                }
+            }
+            return;
+        };
+
+        for mon in monitors {
+            for (idx, ws) in mon.workspaces.iter_mut().enumerate() {
+                let window = target.and_then(|(output, window)| {
+                    (&mon.output == output && idx == mon.active_workspace_idx).then_some(window)
+                });
+                ws.set_edge_window_hover(window);
+            }
+        }
+    }
+
     pub fn resize_edges_under(
         &self,
         output: &Output,

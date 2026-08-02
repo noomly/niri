@@ -7,6 +7,7 @@ use niri_config::utils::MergeWith as _;
 use niri_config::{CenterFocusedColumn, PresetSize, Struts};
 use niri_ipc::{ColumnDisplay, SizeChange, WindowLayout};
 use ordered_float::NotNan;
+use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
@@ -16,13 +17,14 @@ use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
 use super::workspace::{InteractiveResize, ResolvedSize};
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
-use crate::animation::{Animation, Clock};
+use crate::animation::{Animation, Clock, Curve};
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::SizingMode;
 use crate::niri_render_elements;
 use crate::render_helpers::renderer::NiriRenderer;
+use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::RenderCtx;
+use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::utils::transaction::{Transaction, TransactionBlocker};
 use crate::utils::ResizeEdge;
 use crate::window::ResolvedWindowRules;
@@ -92,6 +94,16 @@ pub struct ScrollingSpace<W: LayoutElement> {
 
     /// Configurable properties of the layout.
     options: Rc<Options>,
+
+    /// Partially off-screen window currently hovered for click-to-scroll.
+    edge_window_hover: Option<EdgeWindowHover<W::Id>>,
+}
+
+#[derive(Debug)]
+struct EdgeWindowHover<I> {
+    window: I,
+    tint: SolidColorBuffer,
+    animation: Animation,
 }
 
 niri_render_elements! {
@@ -99,6 +111,7 @@ niri_render_elements! {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
         TabIndicator = TabIndicatorRenderElement,
+        SolidColor = SolidColorRenderElement,
     }
 }
 
@@ -307,6 +320,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             scale,
             clock,
             options,
+            edge_window_hover: None,
         }
     }
 
@@ -329,6 +343,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.parent_area = parent_area;
         self.scale = scale;
         self.options = options;
+
+        if !self.options.gestures.edge_window_click_scroll.on {
+            self.edge_window_hover = None;
+        } else if let Some(hover) = &mut self.edge_window_hover {
+            hover
+                .tint
+                .set_color(self.options.gestures.edge_window_click_scroll.tint);
+        }
 
         // Apply always-center and such right away.
         if !self.columns.is_empty() && !self.view_offset.is_gesture() {
@@ -388,6 +410,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.view_offset.is_animation_ongoing()
             || self.columns.iter().any(Column::are_animations_ongoing)
             || !self.closing_windows.is_empty()
+            || self
+                .edge_window_hover
+                .as_ref()
+                .is_some_and(|hover| !hover.animation.is_done())
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
@@ -2898,6 +2924,61 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .is_fullscreen()
     }
 
+    /// Returns the current output-local tile rectangle when the window is eligible for
+    /// edge-window click-to-scroll.
+    pub fn edge_window_target(&self, window: &W::Id) -> Option<Rectangle<f64, Logical>> {
+        if !self.options.gestures.edge_window_click_scroll.on {
+            return None;
+        }
+
+        let col_idx = self.columns.iter().position(|col| col.contains(window))?;
+        if col_idx == self.active_column_idx {
+            return None;
+        }
+
+        let (tile, tile_pos, visible) = self
+            .tiles_with_render_positions()
+            .find(|(tile, _, _)| tile.window().id() == window)?;
+        if !visible {
+            return None;
+        }
+
+        let rect = Rectangle::new(tile_pos + tile.bob_offset(), tile.tile_size());
+        is_horizontally_clipped(rect, self.view_size).then_some(rect)
+    }
+
+    pub fn set_edge_window_hover(&mut self, window: Option<&W::Id>) {
+        let Some(window) = window else {
+            self.edge_window_hover = None;
+            return;
+        };
+        let Some(rect) = self.edge_window_target(window) else {
+            self.edge_window_hover = None;
+            return;
+        };
+
+        if let Some(hover) = &mut self.edge_window_hover {
+            if hover.window == *window {
+                hover.tint.resize(rect.size);
+                hover
+                    .tint
+                    .set_color(self.options.gestures.edge_window_click_scroll.tint);
+                return;
+            }
+        }
+
+        let tint = SolidColorBuffer::new(
+            rect.size,
+            self.options.gestures.edge_window_click_scroll.tint,
+        );
+        let animation = Animation::ease(self.clock.clone(), 0., 1., 0., 150, Curve::EaseOutCubic);
+        self.edge_window_hover = Some(EdgeWindowHover {
+            window: window.clone(),
+            tint,
+            animation,
+        });
+    }
+
     pub fn render<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -2954,6 +3035,22 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 let visible = visible || tile.alpha_animation.is_some();
                 if !visible {
                     continue;
+                }
+
+                if ctx.target == RenderTarget::Output {
+                    if let Some(hover) = &self.edge_window_hover {
+                        if hover.window == *tile.window().id()
+                            && self.edge_window_target(&hover.window).is_some()
+                        {
+                            let elem = SolidColorRenderElement::from_buffer(
+                                &hover.tint,
+                                tile_pos + tile.bob_offset(),
+                                hover.animation.value().clamp(0., 1.) as f32,
+                                Kind::Unspecified,
+                            );
+                            push(elem.into());
+                        }
+                    }
                 }
 
                 let xray_pos = xray_pos.offset(tile_pos);
@@ -5488,6 +5585,12 @@ fn compute_new_view_offset(
     }
 }
 
+fn is_horizontally_clipped(rect: Rectangle<f64, Logical>, view_size: Size<f64, Logical>) -> bool {
+    let left = rect.loc.x;
+    let right = rect.loc.x + rect.size.w;
+    0. < right && left < view_size.w && (left < 0. || view_size.w < right)
+}
+
 fn compute_working_area(
     parent_area: Rectangle<f64, Logical>,
     scale: f64,
@@ -5571,6 +5674,28 @@ mod tests {
 
     use super::*;
     use crate::utils::round_logical_in_physical;
+
+    #[test]
+    fn edge_window_horizontal_clipping() {
+        let view = Size::from((100., 80.));
+
+        assert!(is_horizontally_clipped(
+            Rectangle::new(Point::from((-10., 5.)), Size::from((50., 40.))),
+            view,
+        ));
+        assert!(is_horizontally_clipped(
+            Rectangle::new(Point::from((70., 5.)), Size::from((50., 40.))),
+            view,
+        ));
+        assert!(!is_horizontally_clipped(
+            Rectangle::new(Point::from((10., 5.)), Size::from((50., 100.))),
+            view,
+        ));
+        assert!(!is_horizontally_clipped(
+            Rectangle::new(Point::from((100., 5.)), Size::from((50., 40.))),
+            view,
+        ));
+    }
 
     #[test]
     fn working_area_starts_at_physical_pixel() {

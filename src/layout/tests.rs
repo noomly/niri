@@ -1655,6 +1655,53 @@ fn check_ops_with_options(
 }
 
 #[test]
+fn edge_window_target_requires_clipped_inactive_column() {
+    let mut options = Options::default();
+    options.gestures.edge_window_click_scroll.on = true;
+    options.layout.struts.left = FloatOrInt(64.);
+    options.layout.struts.right = FloatOrInt(64.);
+
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams {
+                    bbox: Rectangle::from_size(Size::from((600, 200))),
+                    ..TestWindowParams::new(1)
+                },
+            },
+            Op::AddWindow {
+                params: TestWindowParams {
+                    bbox: Rectangle::from_size(Size::from((600, 200))),
+                    ..TestWindowParams::new(2)
+                },
+            },
+            Op::AddWindow {
+                params: TestWindowParams {
+                    bbox: Rectangle::from_size(Size::from((600, 200))),
+                    ..TestWindowParams::new(3)
+                },
+            },
+            Op::CompleteAnimations,
+            Op::FocusColumnLeft,
+            Op::FocusColumnLeft,
+            Op::CompleteAnimations,
+        ],
+    );
+
+    let output = layout.outputs().next().unwrap().clone();
+    assert!(layout.edge_window_target(&output, &1).is_none());
+    let target = [2, 3]
+        .into_iter()
+        .find(|id| layout.edge_window_target(&output, id).is_some())
+        .expect("an inactive edge column should be clipped");
+
+    layout.activate_window(&target);
+    assert!(layout.edge_window_target(&output, &target).is_none());
+}
+
+#[test]
 fn operations_dont_panic() {
     if std::env::var_os("RUN_SLOW_TESTS").is_none() {
         eprintln!("ignoring slow test");

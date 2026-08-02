@@ -79,7 +79,7 @@ impl CursorManager {
         }
     }
 
-    fn get_render_cursor_named(&self, icon: CursorIcon, scale: i32) -> RenderCursor {
+    pub fn get_render_cursor_named(&self, icon: CursorIcon, scale: i32) -> RenderCursor {
         self.get_cursor_with_name(icon, scale)
             .map(|cursor| RenderCursor::Named {
                 icon,

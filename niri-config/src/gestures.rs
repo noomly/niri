@@ -1,10 +1,11 @@
 use crate::utils::MergeWith;
-use crate::FloatOrInt;
+use crate::{Color, FloatOrInt};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Gestures {
     pub dnd_edge_view_scroll: DndEdgeViewScroll,
     pub dnd_edge_workspace_switch: DndEdgeWorkspaceSwitch,
+    pub edge_window_click_scroll: EdgeWindowClickScroll,
     pub hot_corners: HotCorners,
 }
 
@@ -15,6 +16,8 @@ pub struct GesturesPart {
     #[knuffel(child)]
     pub dnd_edge_workspace_switch: Option<DndEdgeWorkspaceSwitchPart>,
     #[knuffel(child)]
+    pub edge_window_click_scroll: Option<EdgeWindowClickScrollPart>,
+    #[knuffel(child)]
     pub hot_corners: Option<HotCorners>,
 }
 
@@ -24,8 +27,44 @@ impl MergeWith<GesturesPart> for Gestures {
             (self, part),
             dnd_edge_view_scroll,
             dnd_edge_workspace_switch,
+            edge_window_click_scroll,
         );
         merge_clone!((self, part), hot_corners);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EdgeWindowClickScroll {
+    pub on: bool,
+    pub tint: Color,
+}
+
+impl Default for EdgeWindowClickScroll {
+    fn default() -> Self {
+        Self {
+            on: false,
+            tint: Color::new_unpremul(68. / 255., 136. / 255., 1., 85. / 255.),
+        }
+    }
+}
+
+#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+pub struct EdgeWindowClickScrollPart {
+    #[knuffel(child)]
+    pub on: bool,
+    #[knuffel(child)]
+    pub off: bool,
+    #[knuffel(child)]
+    pub tint: Option<Color>,
+}
+
+impl MergeWith<EdgeWindowClickScrollPart> for EdgeWindowClickScroll {
+    fn merge_with(&mut self, part: &EdgeWindowClickScrollPart) {
+        self.on |= part.on;
+        if part.off {
+            self.on = false;
+        }
+        merge_clone!((self, part), tint);
     }
 }
 

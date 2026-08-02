@@ -2577,6 +2577,7 @@ impl State {
             }
         }
 
+        self.niri.sync_edge_window_hover(&under);
         self.niri.handle_focus_follows_mouse(&under);
 
         self.niri.pointer_contents.clone_from(&under);
@@ -2680,6 +2681,7 @@ impl State {
 
         let under = self.niri.contents_under(pos);
 
+        self.niri.sync_edge_window_hover(&under);
         self.niri.handle_focus_follows_mouse(&under);
 
         self.niri.pointer_contents.clone_from(&under);
@@ -2821,6 +2823,7 @@ impl State {
                         .layout
                         .view_offset_gesture_begin(&output, Some(ws_idx), false);
                     let grab = SpatialMovementGrab::new(start_data, output, ws_id, true);
+                    self.niri.layout.set_edge_window_hover(None);
                     pointer.set_grab(self, grab, serial, Focus::Clear);
                     self.niri
                         .cursor_manager
@@ -2858,6 +2861,7 @@ impl State {
                             location,
                         };
                         let grab = SpatialMovementGrab::new(start_data, output, ws_id, false);
+                        self.niri.layout.set_edge_window_hover(None);
                         pointer.set_grab(self, grab, serial, Focus::Clear);
                         self.niri
                             .cursor_manager
@@ -2872,6 +2876,29 @@ impl State {
                     }
                 }
             }
+
+            // A plain click on an eligible edge window is compositor navigation: preserve the
+            // normal activation/scrolling behavior, but consume both press and release.
+            if button == Some(MouseButton::Left)
+                && modifiers.is_empty()
+                && !pointer.is_grabbed()
+                && !is_overview_open
+            {
+                let location = pointer.current_location();
+                let under = self.niri.contents_under(location);
+                if self.niri.is_edge_window_target(&under) {
+                    let window = under.window.unwrap().0;
+                    self.niri.suppressed_buttons.insert(button_code);
+                    self.niri.layout.activate_window(&window);
+                    self.niri.layout.set_edge_window_hover(None);
+                    self.niri.queue_redraw_all();
+                    return;
+                }
+            }
+
+            // Any other press may start a compositor or client grab. Stop presenting the
+            // navigation hover until pointer contents are synchronized again.
+            self.niri.layout.set_edge_window_hover(None);
 
             if let Some(mapped) = self.niri.window_under_cursor() {
                 let window = mapped.window.clone();

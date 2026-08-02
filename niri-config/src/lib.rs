@@ -648,6 +648,44 @@ mod tests {
         assert_eq!(config.input.keyboard.repeat_rate, 25);
     }
 
+    #[test]
+    fn edge_window_click_scroll_config() {
+        let default = Config::parse_mem("").unwrap();
+        assert!(!default.gestures.edge_window_click_scroll.on);
+
+        let enabled = Config::parse_mem(
+            r##"
+            gestures {
+                edge-window-click-scroll {
+                    on
+                    tint "#12345678"
+                }
+            }
+            "##,
+        )
+        .unwrap();
+        assert!(enabled.gestures.edge_window_click_scroll.on);
+        assert_eq!(
+            enabled.gestures.edge_window_click_scroll.tint,
+            Color::new_unpremul(
+                0x12 as f32 / 255.,
+                0x34 as f32 / 255.,
+                0x56 as f32 / 255.,
+                0x78 as f32 / 255.,
+            )
+        );
+
+        let disabled = Config::parse_mem(
+            r##"
+            gestures {
+                edge-window-click-scroll { on; off; }
+            }
+            "##,
+        )
+        .unwrap();
+        assert!(!disabled.gestures.edge_window_click_scroll.on);
+    }
+
     #[track_caller]
     fn do_parse(text: &str) -> Config {
         Config::parse_mem(text)
@@ -1653,6 +1691,15 @@ mod tests {
                     trigger_height: 50.0,
                     delay_ms: 100,
                     max_speed: 1500.0,
+                },
+                edge_window_click_scroll: EdgeWindowClickScroll {
+                    on: false,
+                    tint: Color {
+                        r: 0.26666668,
+                        g: 0.53333336,
+                        b: 1.0,
+                        a: 0.33333334,
+                    },
                 },
                 hot_corners: HotCorners {
                     off: false,

@@ -21,6 +21,11 @@ gestures {
         max-speed 1500
     }
 
+    edge-window-click-scroll {
+        // on
+        tint "#4488ff55"
+    }
+
     hot-corners {
         // off
         top-left
@@ -80,6 +85,25 @@ gestures {
     }
 }
 ```
+
+### `edge-window-click-scroll`
+
+When enabled, hovering a tiled window that is partly beyond the left or right edge of its monitor fades a tint over the window and changes the pointer to a hand. A plain left click focuses the window and scrolls it into view without sending the click or its release to the application.
+
+This is useful with left and right layout struts, which leave a sliver of the next window visible. Detection uses the physical monitor bounds independently on every monitor. Floating windows, modified clicks, and windows that are already fully visible keep their normal behavior.
+
+The feature is disabled by default. `tint` accepts any niri color, including alpha.
+
+```kdl
+gestures {
+    edge-window-click-scroll {
+        on
+        tint "#4488ff55"
+    }
+}
+```
+
+Use `off` to disable an earlier enablement from an included configuration file.
 
 ### `hot-corners`
 

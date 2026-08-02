@@ -1768,6 +1768,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.window_under(pos)
     }
 
+    pub fn edge_window_target(&self, window: &W::Id) -> Option<Rectangle<f64, Logical>> {
+        self.scrolling.edge_window_target(window)
+    }
+
+    pub fn set_edge_window_hover(&mut self, window: Option<&W::Id>) {
+        self.scrolling.set_edge_window_hover(window);
+    }
+
     pub fn resize_edges_under(&self, pos: Point<f64, Logical>) -> Option<ResizeEdge> {
         self.tiles_with_render_positions()
             .find_map(|(tile, tile_pos, visible)| {
