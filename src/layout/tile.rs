@@ -851,6 +851,24 @@ impl<W: LayoutElement> Tile<W> {
         size
     }
 
+    /// Returns the current outer shape and opacity for an overlay matching this tile.
+    pub fn overlay_geometry(&self) -> (Size<f64, Logical>, CornerRadius, f32) {
+        let size = self.animated_tile_size();
+        let border_width = self.visual_border_width().unwrap_or(0.);
+        let radius = self
+            .window
+            .geometry_corner_radius()
+            .expanded_by(border_width as f32)
+            .scaled_by(1. - self.expanded_progress() as f32)
+            .fit_to(size.w as f32, size.h as f32);
+        let alpha = self
+            .alpha_animation
+            .as_ref()
+            .map_or(1., |alpha| alpha.anim.clamped_value()) as f32;
+
+        (size, radius, alpha)
+    }
+
     pub fn buf_loc(&self) -> Point<f64, Logical> {
         let mut loc = Point::from((0., 0.));
         loc += self.window_loc();
@@ -1326,10 +1344,7 @@ impl<W: LayoutElement> Tile<W> {
 
         let scale = Scale::from(self.scale);
 
-        let tile_alpha = self
-            .alpha_animation
-            .as_ref()
-            .map_or(1., |alpha| alpha.anim.clamped_value()) as f32;
+        let (_, _, tile_alpha) = self.overlay_geometry();
 
         let mut pushed = false;
         self.window().set_offscreen_data(None);

@@ -6271,11 +6271,6 @@ impl Niri {
             return;
         }
 
-        // This feature is deliberately click-to-scroll, even with focus-follows-mouse enabled.
-        if self.is_edge_window_target(new_focus) {
-            return;
-        }
-
         // Recompute the current pointer focus because we don't update it during animations.
         let current_focus = self.contents_under(pointer.current_location());
 

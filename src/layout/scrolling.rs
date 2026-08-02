@@ -4,10 +4,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
-use niri_config::{CenterFocusedColumn, PresetSize, Struts};
+use niri_config::{CenterFocusedColumn, GradientInterpolation, PresetSize, Struts};
 use niri_ipc::{ColumnDisplay, SizeChange, WindowLayout};
 use ordered_float::NotNan;
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
@@ -21,8 +20,8 @@ use crate::animation::{Animation, Clock, Curve};
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::SizingMode;
 use crate::niri_render_elements;
+use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
-use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::utils::transaction::{Transaction, TransactionBlocker};
@@ -102,7 +101,7 @@ pub struct ScrollingSpace<W: LayoutElement> {
 #[derive(Debug)]
 struct EdgeWindowHover<I> {
     window: I,
-    tint: SolidColorBuffer,
+    tint: BorderRenderElement,
     animation: Animation,
 }
 
@@ -111,7 +110,6 @@ niri_render_elements! {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
         TabIndicator = TabIndicatorRenderElement,
-        SolidColor = SolidColorRenderElement,
     }
 }
 
@@ -346,10 +344,6 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         if !self.options.gestures.edge_window_click_scroll.on {
             self.edge_window_hover = None;
-        } else if let Some(hover) = &mut self.edge_window_hover {
-            hover
-                .tint
-                .set_color(self.options.gestures.edge_window_click_scroll.tint);
         }
 
         // Apply always-center and such right away.
@@ -433,6 +427,41 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             let view_rect = Rectangle::new(col_pos, view_size);
             col.update_render_elements(is_active, view_rect);
         }
+
+        self.update_edge_window_tint();
+    }
+
+    fn update_edge_window_tint(&mut self) {
+        let params = self.edge_window_hover.as_ref().and_then(|hover| {
+            let tile = self
+                .tiles()
+                .find(|tile| tile.window().id() == &hover.window)?;
+            let (size, radius, tile_alpha) = tile.overlay_geometry();
+            let alpha = hover.animation.value().clamp(0., 1.) as f32 * tile_alpha;
+            Some((size, radius, alpha))
+        });
+
+        let Some((size, radius, alpha)) = params else {
+            return;
+        };
+        let Some(hover) = &mut self.edge_window_hover else {
+            return;
+        };
+        let color = self.options.gestures.edge_window_click_scroll.tint;
+        let geometry = Rectangle::from_size(size);
+        hover.tint.update(
+            size,
+            geometry,
+            GradientInterpolation::default(),
+            color,
+            color,
+            0.,
+            geometry,
+            0.,
+            radius,
+            self.scale as f32,
+            alpha,
+        );
     }
 
     pub fn tiles(&self) -> impl Iterator<Item = &Tile<W>> + '_ {
@@ -2952,31 +2981,26 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             self.edge_window_hover = None;
             return;
         };
-        let Some(rect) = self.edge_window_target(window) else {
+        if self.edge_window_target(window).is_none() {
             self.edge_window_hover = None;
             return;
-        };
-
-        if let Some(hover) = &mut self.edge_window_hover {
-            if hover.window == *window {
-                hover.tint.resize(rect.size);
-                hover
-                    .tint
-                    .set_color(self.options.gestures.edge_window_click_scroll.tint);
-                return;
-            }
         }
 
-        let tint = SolidColorBuffer::new(
-            rect.size,
-            self.options.gestures.edge_window_click_scroll.tint,
-        );
+        if self
+            .edge_window_hover
+            .as_ref()
+            .is_some_and(|hover| hover.window == *window)
+        {
+            return;
+        }
+
         let animation = Animation::ease(self.clock.clone(), 0., 1., 0., 150, Curve::EaseOutCubic);
         self.edge_window_hover = Some(EdgeWindowHover {
             window: window.clone(),
-            tint,
+            tint: BorderRenderElement::empty(),
             animation,
         });
+        self.update_edge_window_tint();
     }
 
     pub fn render<R: NiriRenderer>(
@@ -3037,17 +3061,18 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     continue;
                 }
 
-                if ctx.target == RenderTarget::Output {
+                if ctx.target == RenderTarget::Output
+                    && BorderRenderElement::has_shader(ctx.renderer)
+                {
                     if let Some(hover) = &self.edge_window_hover {
                         if hover.window == *tile.window().id()
                             && self.edge_window_target(&hover.window).is_some()
                         {
-                            let elem = SolidColorRenderElement::from_buffer(
-                                &hover.tint,
-                                tile_pos + tile.bob_offset(),
-                                hover.animation.value().clamp(0., 1.) as f32,
-                                Kind::Unspecified,
-                            );
+                            let elem = hover
+                                .tint
+                                .clone()
+                                .with_location(tile_pos + tile.bob_offset());
+                            let elem: TileRenderElement<R> = elem.into();
                             push(elem.into());
                         }
                     }

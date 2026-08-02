@@ -92,6 +92,8 @@ When enabled, hovering a tiled window that is partly beyond the left or right ed
 
 This is useful with left and right layout struts, which leave a sliver of the next window visible. Detection uses the physical monitor bounds independently on every monitor. Floating windows, modified clicks, and windows that are already fully visible keep their normal behavior.
 
+When `focus-follows-mouse` is enabled, its normal behavior still takes precedence, including `max-scroll-amount`. The click-to-scroll behavior remains available for partially visible windows that focus-follows-mouse does not activate.
+
 The feature is disabled by default. `tint` accepts any niri color, including alpha.
 
 ```kdl
